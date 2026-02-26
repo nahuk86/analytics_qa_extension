@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analytics QA — Options</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #1e1e2e;
+      --surface: #2a2a3e;
+      --border:  #3a3a5c;
+      --text:    #cdd6f4;
+      --muted:   #7f849c;
+      --accent:  #89b4fa;
+      --pass:    #a6e3a1;
+      --fail:    #f38ba8;
+      --warn:    #f9e2af;
+      --radius:  6px;
+      --font:    'Segoe UI', system-ui, sans-serif;
+      --mono:    'Cascadia Code', 'Consolas', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      padding: 32px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    h1 { font-size: 20px; color: var(--accent); margin-bottom: 4px; }
+    p.subtitle { color: var(--muted); font-size: 13px; margin-bottom: 32px; }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 24px;
+    }
+    .section h2 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    select, input[type="text"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    select:focus, input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      font-size: 12px;
+      resize: vertical;
+      min-height: 320px;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    textarea:focus { outline: none; border-color: var(--accent); }
+
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+    .btn {
+      padding: 8px 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: var(--border); }
+    .btn.primary { border-color: var(--accent); color: var(--accent); }
+    .btn.primary:hover { background: rgba(137,180,250,0.12); }
+    .btn.danger  { border-color: var(--fail);   color: var(--fail);   }
+    .btn.danger:hover  { background: rgba(243,139,168,0.12); }
+
+    #status-msg {
+      font-size: 12px;
+      padding: 4px 0;
+      min-height: 20px;
+    }
+    #status-msg.ok   { color: var(--pass); }
+    #status-msg.err  { color: var(--fail); }
+    #status-msg.warn { color: var(--warn); }
+
+    .env-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .env-table th, .env-table td {
+      text-align: left;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .env-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .env-table tr:last-child td { border-bottom: none; }
+    .env-table input[type="text"] { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <h1>⚙ Analytics QA — Options</h1>
+  <p class="subtitle">Configure contracts and environment mappings for the Analytics QA Extension.</p>
+
+  <!-- Contract editor -->
+  <div class="section">
+    <h2>Contract Editor</h2>
+
+    <label for="contract-key">Contract Name</label>
+    <input type="text" id="contract-key" placeholder="e.g. my-site-prod" style="max-width:300px">
+
+    <label for="contract-json">Contract JSON</label>
+    <textarea id="contract-json" spellcheck="false"></textarea>
+
+    <div class="btn-row">
+      <button class="btn primary" id="btn-save-contract">💾 Save Contract</button>
+      <button class="btn" id="btn-load-default">Load Default Template</button>
+      <button class="btn danger" id="btn-delete-contract">✕ Delete Contract</button>
+      <span id="status-msg"></span>
+    </div>
+  </div>
+
+  <!-- Contract selector -->
+  <div class="section">
+    <h2>Active Contract</h2>
+    <label for="select-contract">Select the contract to use for validation</label>
+    <select id="select-contract" style="max-width:300px"></select>
+    <div class="btn-row">
+      <button class="btn primary" id="btn-set-active">✔ Set as Active</button>
+    </div>
+  </div>
+
+  <!-- Environment mappings -->
+  <div class="section">
+    <h2>Environment Mappings</h2>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px">
+      Map hostname patterns to contracts. The first matching entry wins.
+    </p>
+    <table class="env-table" id="env-table">
+      <thead>
+        <tr><th>Hostname Pattern</th><th>Contract Name</th><th></th></tr>
+      </thead>
+      <tbody id="env-body"></tbody>
+    </table>
+    <div class="btn-row">
+      <button class="btn" id="btn-add-env">+ Add Row</button>
+      <button class="btn primary" id="btn-save-envs">💾 Save Mappings</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
