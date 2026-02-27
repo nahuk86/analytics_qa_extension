@@ -1,0 +1,92 @@
+{
+  "_comment": "Analytics QA Extension — Sample contract file. Copy and customise in the Options page.",
+
+  "purchase": {
+    "required": ["events", "purchaseID", "eVar1", "products"],
+    "rules": {
+      "purchaseID": "uuid",
+      "eVar1": "not_empty",
+      "events": "contains:purchase",
+      "products": "not_empty"
+    },
+    "conditionals": [
+      { "if_event": "purchase", "require": ["purchaseID", "products"] }
+    ]
+  },
+
+  "prodView": {
+    "required": ["events", "products", "eVar2"],
+    "rules": {
+      "events": "contains:prodView",
+      "products": "not_empty",
+      "eVar2": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "scAdd": {
+    "required": ["events", "products"],
+    "rules": {
+      "events": "contains:scAdd",
+      "products": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "event1": {
+    "required": ["events", "eVar3"],
+    "rules": {
+      "events": "contains:event1",
+      "eVar3": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "default": {
+    "required": ["pageName", "server"],
+    "rules": {
+      "pageName": "not_empty",
+      "server": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "_pfizerconmigo_comment": "Contract for pfizerconmigo.com.ar — Pfizer patient-support site (Argentina). Customise once you have observed real hit payloads with the extension.",
+
+  "pfizerconmigo_pageView": {
+    "required": ["pageName", "channel", "server"],
+    "rules": {
+      "pageName": "not_empty",
+      "channel": "not_empty",
+      "server": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_registration": {
+    "required": ["events", "eVar1", "pageName"],
+    "rules": {
+      "eVar1": "not_empty",
+      "pageName": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_login": {
+    "required": ["events", "pageName"],
+    "rules": {
+      "pageName": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_contentInteraction": {
+    "required": ["events", "pageName", "eVar5"],
+    "rules": {
+      "pageName": "not_empty",
+      "eVar5": "not_empty"
+    },
+    "conditionals": []
+  }
+}
+
