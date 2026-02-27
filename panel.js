@@ -70,11 +70,13 @@ function handlePortMessage(msg) {
 
 /** @returns {HitRecord[]} Filtered hits based on current filter values */
 function getFilteredHits() {
-  const statusFilter = document.getElementById('filter-status').value;
-  const eventFilter  = document.getElementById('filter-event').value.toLowerCase().trim();
+  const statusFilter  = document.getElementById('filter-status').value;
+  const typeFilter    = document.getElementById('filter-type').value;
+  const eventFilter   = document.getElementById('filter-event').value.toLowerCase().trim();
 
   return allHits.filter(hit => {
     if (statusFilter && hit.validation.status !== statusFilter) return false;
+    if (typeFilter   && hit.hitType !== typeFilter)            return false;
     if (eventFilter) {
       const events = hit.payload['events'];
       const eventsArr = events
@@ -103,14 +105,22 @@ function formatTime(ts) {
 }
 
 /**
- * Get a display-friendly label for the hit (events or "Page View").
+ * Get a display-friendly label for the hit (events or hit type).
  * @param {HitRecord} hit
  * @returns {string}
  */
 function hitLabel(hit) {
   const events = hit.payload['events'];
-  if (!events) return 'Page View';
-  return Array.isArray(events) ? events.join(', ') : String(events);
+  if (events) return Array.isArray(events) ? events.join(', ') : String(events);
+  // Fall back to hit type label
+  const typeLabels = {
+    pageView:     'Page View',
+    customLink:   'Custom Link',
+    downloadLink: 'Download Link',
+    exitLink:     'Exit Link',
+    linkTrack:    'Link Track',
+  };
+  return typeLabels[hit.hitType] || 'Page View';
 }
 
 /**
@@ -157,7 +167,7 @@ function renderHitList() {
       <div class="hit-status-bar ${hit.validation.status}"></div>
       <div class="hit-info">
         <div class="hit-events">${esc(hitLabel(hit))}</div>
-        <div class="hit-time">${esc(formatTime(hit.timestamp))} · ${esc(hit.method)}</div>
+        <div class="hit-time">${esc(formatTime(hit.timestamp))} · ${esc(hit.method)} · ${esc(hit.hitType || 'pageView')}${hit.isAEP ? ' · <span class="aep-badge">AEP</span>' : ''}</div>
       </div>
       <span class="hit-badge ${hit.validation.status}">${esc(hit.validation.status)}</span>
     `;
@@ -230,6 +240,9 @@ function renderDetailPane(hit) {
         <tr><th>URL</th><td style="font-family:var(--mono);font-size:11px;word-break:break-all">${esc(url)}</td></tr>
         <tr><th>Method</th><td>${esc(method)}</td></tr>
         <tr><th>Time</th><td>${esc(formatTime(timestamp))}</td></tr>
+        <tr><th>Hit Type</th><td>${esc(hit.hitType || 'pageView')}</td></tr>
+        <tr><th>SDK</th><td>${hit.isAEP ? '<span class="sdk-aep">AEP Web SDK (alloy.js)</span>' : 'AppMeasurement'}</td></tr>
+        ${hit.reportSuiteId ? `<tr><th>Report Suite</th><td style="font-family:var(--mono)">${esc(hit.reportSuiteId)}</td></tr>` : ''}
       </table>
     </div>
 
@@ -391,6 +404,7 @@ document.getElementById('btn-options').addEventListener('click', () => {
 });
 
 document.getElementById('filter-status').addEventListener('change', renderHitList);
+document.getElementById('filter-type').addEventListener('change', renderHitList);
 document.getElementById('filter-event').addEventListener('input', renderHitList);
 
 // ─── Restore baseline from storage ───────────────────────────────────────────

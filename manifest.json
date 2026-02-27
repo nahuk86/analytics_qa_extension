@@ -11,6 +11,8 @@
   "host_permissions": [
     "https://*.omtrdc.net/*",
     "http://*.omtrdc.net/*",
+    "https://*.adobedc.net/*",
+    "http://*.adobedc.net/*",
     "*://*/*"
   ],
   "background": {

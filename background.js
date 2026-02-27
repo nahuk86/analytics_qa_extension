@@ -3,23 +3,31 @@
  *
  * Responsibilities:
  *  - Intercept Adobe Analytics network requests via chrome.webRequest
- *  - Parse GET (querystring) and POST (body) payloads
- *  - Run validation against the active contract for the tab's environment
+ *    · AppMeasurement hits: *.omtrdc.net/b/ss/  (GET or POST, URL-encoded)
+ *    · AEP Web SDK hits:    *.adobedc.net/ee/   (POST, JSON body)
+ *  - Parse payloads (URL-encoded or JSON) using utils/parser.js
+ *  - Normalise AppMeasurement context-data variables (c. prefix)
+ *  - Extract report-suite ID and hit type from each request
+ *  - Run validation against the active contract
  *  - Broadcast validated hit records to connected DevTools panels
  *  - Maintain an in-memory hit log per tab (capped at MAX_HITS_PER_TAB)
  */
 
 'use strict';
 
+// Import shared parser and validator so we don't duplicate logic
+importScripts('utils/parser.js');
+importScripts('validator.js');
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_HITS_PER_TAB = 500;
 
-// Pattern that identifies an Adobe Analytics collection request
-const AA_PATH_PATTERN = /\/b\/ss\//;
+// Pattern that identifies an AppMeasurement collection path
+const AA_PATH_PATTERN  = /\/b\/ss\//;
 
-// Domains used by Adobe Analytics
-const AA_DOMAINS = ['*.omtrdc.net'];
+// Pattern that identifies an AEP Web SDK (alloy.js) Edge Network path
+const AEP_PATH_PATTERN = /\/ee\//;
 
 // ─── In-memory state ─────────────────────────────────────────────────────────
 
@@ -32,37 +40,57 @@ const hitsByTab = new Map();
  */
 const panelPorts = new Map();
 
-// ─── Utilities ───────────────────────────────────────────────────────────────
+// ─── URL / request classification ────────────────────────────────────────────
 
 /**
- * Parse a URL query-string or POST body into a plain object.
- * Splits comma-separated values into arrays where appropriate.
+ * Return true when the URL is an AppMeasurement collection hit
+ * (*.omtrdc.net/b/ss/ or CNAME-based servers using the same path).
  *
- * @param {string} raw  - Raw query-string or body text
- * @returns {Record<string, string|string[]>}
+ * @param {string} url
+ * @returns {boolean}
  */
-function parsePayload(raw) {
-  if (!raw) return {};
-  const result = {};
+function isAppMeasurementRequest(url) {
   try {
-    const params = new URLSearchParams(raw);
-    for (const [key, value] of params.entries()) {
-      // Merge duplicate keys into an array
-      if (Object.prototype.hasOwnProperty.call(result, key)) {
-        result[key] = [].concat(result[key], value);
-      } else {
-        // Split comma-separated values (common in Adobe Analytics "events" param)
-        result[key] = value.includes(',') ? value.split(',').map(v => v.trim()) : value;
-      }
-    }
-  } catch (err) {
-    console.error('[AnalyticsQA] Failed to parse payload:', err);
+    const { hostname, pathname } = new URL(url);
+    return (
+      (hostname.endsWith('.omtrdc.net') || hostname === 'omtrdc.net') &&
+      AA_PATH_PATTERN.test(pathname)
+    );
+  } catch {
+    return false;
   }
-  return result;
 }
 
 /**
- * Decode a base64-encoded request body (as returned by chrome.webRequest).
+ * Return true when the URL is an AEP Web SDK (alloy.js) Edge Network request.
+ * These go to *.adobedc.net/ee/ and carry a JSON POST body.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isAEPRequest(url) {
+  try {
+    const { hostname, pathname } = new URL(url);
+    return hostname.endsWith('.adobedc.net') && AEP_PATH_PATTERN.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return true when the URL is any Adobe Analytics request the extension should capture.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isAnalyticsRequest(url) {
+  return isAppMeasurementRequest(url) || isAEPRequest(url);
+}
+
+// ─── Payload decoding ─────────────────────────────────────────────────────────
+
+/**
+ * Decode a raw ArrayBuffer request body (as returned by chrome.webRequest).
  *
  * @param {chrome.webRequest.UploadData[]} rawBody
  * @returns {string}
@@ -79,31 +107,59 @@ function decodeRequestBody(rawBody) {
   }
 }
 
+// ─── Metadata extraction ──────────────────────────────────────────────────────
+
 /**
- * Determine whether a URL is an Adobe Analytics collection hit.
+ * Extract the report suite ID from an AppMeasurement URL path (/b/ss/<RSID>/).
  *
  * @param {string} url
- * @returns {boolean}
+ * @returns {string|null}
  */
-function isAnalyticsRequest(url) {
+function extractReportSuiteId(url) {
   try {
-    const parsed = new URL(url);
-    return (
-      (parsed.hostname.endsWith('.omtrdc.net') || parsed.hostname.includes('omtrdc')) &&
-      AA_PATH_PATTERN.test(parsed.pathname)
-    );
+    const match = new URL(url).pathname.match(/\/b\/ss\/([^/]+)\//);
+    return match ? match[1] : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Detect the hit type from a parsed payload.
+ *
+ * AppMeasurement uses the "pe" (page event) parameter:
+ *   lnk_o → custom link
+ *   lnk_d → download link
+ *   lnk_e → exit link
+ *   (absent) → page view
+ *
+ * AEP Web SDK uses xdm.eventType (stored as _eventType):
+ *   web.webpagedetails.pageViews   → pageView
+ *   web.webInteraction.linkClicks  → linkTrack
+ *
+ * @param {Record<string,*>} payload
+ * @returns {'pageView'|'customLink'|'downloadLink'|'exitLink'|'linkTrack'|'other'}
+ */
+function detectHitType(payload) {
+  const pe = payload['pe'];
+  if (pe === 'lnk_o') return 'customLink';
+  if (pe === 'lnk_d') return 'downloadLink';
+  if (pe === 'lnk_e') return 'exitLink';
+
+  const eventType = payload['_eventType'] || '';
+  if (eventType.includes('pageView') || eventType.includes('pageviews')) return 'pageView';
+  if (eventType.includes('link') || eventType.includes('interaction'))   return 'linkTrack';
+
+  return 'pageView'; // default for standard image requests with no "pe"
 }
 
 // ─── Validation engine integration ───────────────────────────────────────────
 
 /**
  * Load the active contract from chrome.storage.local.
- * Falls back to the bundled contracts.json default.
+ * Falls back to the 'default' key if no specific contract is active.
  *
- * @returns {Promise<ContractMap>}
+ * @returns {Promise<Record<string,*>>}
  */
 async function loadActiveContract() {
   return new Promise(resolve => {
@@ -113,172 +169,79 @@ async function loadActiveContract() {
         return;
       }
       const contracts = result.contracts || {};
-      const key = result.activeContractKey || 'default';
+      const key       = result.activeContractKey || 'default';
       resolve(contracts[key] || contracts['default'] || {});
     });
   });
 }
 
-/**
- * Simple inline validator (mirrors validator.js logic for service-worker context).
- * Full validator.js is used in the panel context.
- *
- * @param {Record<string,*>} payload
- * @param {ContractMap} contract
- * @returns {ValidationResult}
- */
-function validateHit(payload, contract) {
-  const errors = [];
-  const warnings = [];
-
-  // Detect which events are present in the hit
-  const eventValues = payload['events'];
-  const presentEvents = eventValues
-    ? (Array.isArray(eventValues) ? eventValues : [eventValues])
-    : [];
-
-  // Find matching rule sets by checking if the event name appears in the hit
-  let matchedRuleKey = null;
-  for (const ruleKey of Object.keys(contract)) {
-    if (presentEvents.some(e => e.toLowerCase() === ruleKey.toLowerCase())) {
-      matchedRuleKey = ruleKey;
-      break;
-    }
-  }
-
-  // If no specific event matched, try a 'default' rule set
-  const ruleSet = matchedRuleKey
-    ? contract[matchedRuleKey]
-    : (contract['default'] || null);
-
-  if (!ruleSet) {
-    return { status: 'WARNING', errors: [], warnings: ['No matching contract rule for this hit.'] };
-  }
-
-  // ── Required fields ─────────────────────────────────────────────────────
-  for (const field of (ruleSet.required || [])) {
-    const val = payload[field];
-    if (val === undefined || val === null || val === '') {
-      errors.push({ field, rule: 'required', message: `Required field "${field}" is missing or empty.` });
-    }
-  }
-
-  // ── Rule evaluation ─────────────────────────────────────────────────────
-  for (const [field, rule] of Object.entries(ruleSet.rules || {})) {
-    const val = payload[field];
-
-    // Skip rule evaluation if field is absent (required check above handles presence)
-    if (val === undefined || val === null) continue;
-
-    const strVal = Array.isArray(val) ? val.join(',') : String(val);
-
-    if (rule === 'not_empty') {
-      if (strVal.trim() === '') {
-        errors.push({ field, rule, message: `Field "${field}" must not be empty.` });
-      }
-    } else if (rule === 'number') {
-      if (isNaN(Number(strVal))) {
-        errors.push({ field, rule, message: `Field "${field}" must be a valid number.` });
-      }
-    } else if (rule === 'uuid') {
-      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (!uuidRe.test(strVal)) {
-        errors.push({ field, rule, message: `Field "${field}" must be a valid UUID.` });
-      }
-    } else if (typeof rule === 'string' && rule.startsWith('contains:')) {
-      const expected = rule.split(':')[1];
-      const values = Array.isArray(val) ? val : strVal.split(',').map(s => s.trim());
-      if (!values.includes(expected)) {
-        errors.push({ field, rule, message: `Field "${field}" must contain value "${expected}".` });
-      }
-    } else if (typeof rule === 'string' && rule.startsWith('enum:')) {
-      const allowed = rule.split(':')[1].split('|');
-      if (!allowed.includes(strVal)) {
-        errors.push({ field, rule, message: `Field "${field}" must be one of: ${allowed.join(', ')}.` });
-      }
-    } else if (typeof rule === 'string' && rule.startsWith('regex:')) {
-      const pattern = rule.slice(6);
-      try {
-        if (!new RegExp(pattern).test(strVal)) {
-          errors.push({ field, rule, message: `Field "${field}" does not match pattern ${pattern}.` });
-        }
-      } catch {
-        warnings.push(`Invalid regex pattern for field "${field}": ${pattern}`);
-      }
-    }
-  }
-
-  // ── Conditional rules ────────────────────────────────────────────────────
-  for (const cond of (ruleSet.conditionals || [])) {
-    // { if_event: 'purchase', require: ['purchaseID'] }
-    const { if_event, require: requires } = cond;
-    if (if_event && presentEvents.some(e => e.toLowerCase() === if_event.toLowerCase())) {
-      for (const rf of (requires || [])) {
-        if (!payload[rf]) {
-          errors.push({ field: rf, rule: 'conditional_required', message: `Field "${rf}" is required when event "${if_event}" is present.` });
-        }
-      }
-    }
-  }
-
-  const status = errors.length > 0 ? 'FAIL' : warnings.length > 0 ? 'WARNING' : 'PASS';
-  return { status, errors, warnings };
-}
-
 // ─── Hit record creation ──────────────────────────────────────────────────────
 
 /**
- * Build a HitRecord from a web request detail object.
+ * Build a HitRecord from a web request and its decoded payload string.
+ * Handles both AppMeasurement (URL-encoded) and AEP Web SDK (JSON) payloads.
  *
- * @param {chrome.webRequest.WebRequestBodyDetails|chrome.webRequest.WebRequestDetails} details
+ * @param {chrome.webRequest.WebRequestBodyDetails} details
  * @param {'GET'|'POST'} method
- * @param {string} rawPayload
- * @returns {Promise<HitRecord>}
+ * @param {string} rawPayload  - Decoded POST body or URL querystring
+ * @param {boolean} isAEP      - True when the request is an AEP Web SDK call
+ * @returns {Promise<HitRecord[]>}  Usually one item; AEP batches may yield several
  */
-async function buildHitRecord(details, method, rawPayload) {
-  const payload = parsePayload(rawPayload);
+async function buildHitRecords(details, method, rawPayload, isAEP) {
   const contract = await loadActiveContract();
-  const validation = validateHit(payload, contract);
 
-  /** @type {HitRecord} */
-  const record = {
-    id: `${details.tabId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    timestamp: Date.now(),
-    url: details.url,
-    method,
-    rawPayload,
-    payload,
-    tabId: details.tabId,
-    validation,
-  };
+  let payloads;
+  if (isAEP) {
+    // AEP Web SDK → parse JSON, returns one object per event in the batch
+    payloads = parseAEPPayload(rawPayload);
+  } else {
+    // AppMeasurement → parse URL-encoded, then normalise context-data
+    payloads = [flattenContextData(parsePayload(rawPayload))];
+  }
 
-  return record;
+  return payloads.map((payload, index) => {
+    const validation    = validateHit(payload, contract);
+    const reportSuiteId = isAEP ? null : extractReportSuiteId(details.url);
+    const hitType       = detectHitType(payload);
+
+    return {
+      id: `${details.tabId}-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+      timestamp:    Date.now(),
+      url:          details.url,
+      method,
+      rawPayload,
+      payload,
+      tabId:        details.tabId,
+      validation,
+      reportSuiteId,
+      hitType,
+      isAEP,
+    };
+  });
 }
 
+// ─── State management ─────────────────────────────────────────────────────────
+
 /**
- * Store hit record for a tab and send it to the connected panel (if any).
+ * Store hit records for a tab and notify the connected DevTools panel.
  *
  * @param {HitRecord} record
  */
 function storeAndBroadcast(record) {
   const { tabId } = record;
 
-  // Store in memory
   if (!hitsByTab.has(tabId)) hitsByTab.set(tabId, []);
   const hits = hitsByTab.get(tabId);
   hits.push(record);
   if (hits.length > MAX_HITS_PER_TAB) hits.shift();
 
-  // Persist to chrome.storage for panel re-hydration
   persistHitsForTab(tabId, hits);
 
-  // Send to connected panel
   const port = panelPorts.get(String(tabId));
   if (port) {
     try {
       port.postMessage({ type: 'NEW_HIT', hit: record });
-    } catch (err) {
-      // Port may have been disconnected
+    } catch {
       panelPorts.delete(String(tabId));
     }
   }
@@ -301,22 +264,19 @@ function persistHitsForTab(tabId, hits) {
 
 // ─── Web Request Listener ─────────────────────────────────────────────────────
 
-/**
- * Handle outgoing GET requests to Adobe Analytics endpoints.
- */
 chrome.webRequest.onBeforeRequest.addListener(
   async details => {
     if (!isAnalyticsRequest(details.url)) return;
 
+    const method = details.method || 'GET';
+    const isAEP  = isAEPRequest(details.url);
     let rawPayload = '';
-    let method = details.method || 'GET';
 
     if (method === 'POST' && details.requestBody) {
       const body = details.requestBody;
       if (body.raw) {
         rawPayload = decodeRequestBody(body.raw);
       } else if (body.formData) {
-        // formData is an object of key→string[] mappings
         const params = new URLSearchParams();
         for (const [k, vals] of Object.entries(body.formData)) {
           for (const v of vals) params.append(k, v);
@@ -324,7 +284,6 @@ chrome.webRequest.onBeforeRequest.addListener(
         rawPayload = params.toString();
       }
     } else {
-      // Extract query-string from URL
       try {
         rawPayload = new URL(details.url).search.slice(1);
       } catch {
@@ -332,8 +291,10 @@ chrome.webRequest.onBeforeRequest.addListener(
       }
     }
 
-    const record = await buildHitRecord(details, method, rawPayload);
-    storeAndBroadcast(record);
+    const records = await buildHitRecords(details, method, rawPayload, isAEP);
+    for (const record of records) {
+      storeAndBroadcast(record);
+    }
   },
   { urls: ['<all_urls>'] },
   ['requestBody']
@@ -341,10 +302,6 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 // ─── Message / Port Handling ──────────────────────────────────────────────────
 
-/**
- * DevTools panels connect via long-lived ports.
- * The port name encodes the inspected tab id: "analytics-qa-panel-<tabId>"
- */
 chrome.runtime.onConnect.addListener(port => {
   const match = port.name.match(/^analytics-qa-panel-(\d+)$/);
   if (!match) return;
@@ -356,18 +313,13 @@ chrome.runtime.onConnect.addListener(port => {
     panelPorts.delete(tabId);
   });
 
-  // Send existing hits so the panel can pre-populate on open
   const existing = hitsByTab.get(Number(tabId)) || [];
   port.postMessage({ type: 'INITIAL_HITS', hits: existing });
 });
 
-/**
- * One-shot messages from panel / options page.
- */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'GET_HITS') {
-    const hits = hitsByTab.get(message.tabId) || [];
-    sendResponse({ hits });
+    sendResponse({ hits: hitsByTab.get(message.tabId) || [] });
     return true;
   }
 
@@ -381,7 +333,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'SAVE_BASELINE') {
     const { tabId, hitId } = message;
     const hits = hitsByTab.get(tabId) || [];
-    const hit = hits.find(h => h.id === hitId);
+    const hit  = hits.find(h => h.id === hitId);
     if (hit) {
       chrome.storage.local.set({ [`baseline_${tabId}`]: hit }, () => {
         sendResponse({ ok: true });
@@ -399,3 +351,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
+

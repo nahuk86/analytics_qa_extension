@@ -49,5 +49,44 @@
       "server": "not_empty"
     },
     "conditionals": []
+  },
+
+  "_pfizerconmigo_comment": "Contract for pfizerconmigo.com.ar — Pfizer patient-support site (Argentina). Customise once you have observed real hit payloads with the extension.",
+
+  "pfizerconmigo_pageView": {
+    "required": ["pageName", "channel", "server"],
+    "rules": {
+      "pageName": "not_empty",
+      "channel": "not_empty",
+      "server": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_registration": {
+    "required": ["events", "eVar1", "pageName"],
+    "rules": {
+      "eVar1": "not_empty",
+      "pageName": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_login": {
+    "required": ["events", "pageName"],
+    "rules": {
+      "pageName": "not_empty"
+    },
+    "conditionals": []
+  },
+
+  "pfizerconmigo_contentInteraction": {
+    "required": ["events", "pageName", "eVar5"],
+    "rules": {
+      "pageName": "not_empty",
+      "eVar5": "not_empty"
+    },
+    "conditionals": []
   }
 }
+

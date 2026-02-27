@@ -258,6 +258,10 @@
     .error-msg  { color: var(--fail);  font-size: 11px; }
     .warn-msg   { color: var(--warn);  font-size: 11px; }
 
+    /* SDK / AEP labels */
+    .aep-badge { color: var(--accent); font-weight: 600; }
+    .sdk-aep   { color: var(--accent); }
+
     /* Diff table */
     .diff-added   { color: var(--pass); }
     .diff-removed { color: var(--fail); }
@@ -295,6 +299,18 @@
         <option value="PASS">PASS</option>
         <option value="FAIL">FAIL</option>
         <option value="WARNING">WARNING</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label for="filter-type">Type</label>
+      <select id="filter-type">
+        <option value="">All</option>
+        <option value="pageView">Page View</option>
+        <option value="customLink">Custom Link</option>
+        <option value="downloadLink">Download</option>
+        <option value="exitLink">Exit Link</option>
+        <option value="linkTrack">Link Track</option>
       </select>
     </div>
 
