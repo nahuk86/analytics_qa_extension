@@ -3,9 +3,10 @@
  *
  * Responsibilities:
  *  - Intercept Adobe Analytics network requests via chrome.webRequest
- *    · AppMeasurement hits: *.omtrdc.net/b/ss/  (GET or POST, URL-encoded)
- *    · AEP Web SDK hits:    *.adobedc.net/ee/   (POST, JSON body)
+ *    · AppMeasurement hits: *.omtrdc.net/b/ss/ or CNAME aliases (GET or POST, URL-encoded)
+ *    · AEP Web SDK hits:    *.adobedc.net/ee/  or CNAME aliases (POST, JSON body)
  *  - Parse payloads (URL-encoded or JSON) using utils/parser.js
+ *  - Classify URLs using utils/classifier.js (supports CNAME / first-party collection)
  *  - Normalise AppMeasurement context-data variables (c. prefix)
  *  - Extract report-suite ID and hit type from each request
  *  - Run validation against the active contract
@@ -15,19 +16,17 @@
 
 'use strict';
 
-// Import shared parser and validator so we don't duplicate logic
+// Import shared parser, URL classifier, and validator so we don't duplicate logic
 importScripts('utils/parser.js');
+importScripts('utils/classifier.js');
 importScripts('validator.js');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_HITS_PER_TAB = 500;
 
-// Pattern that identifies an AppMeasurement collection path
-const AA_PATH_PATTERN  = /\/b\/ss\//;
-
-// Pattern that identifies an AEP Web SDK (alloy.js) Edge Network path
-const AEP_PATH_PATTERN = /\/ee\//;
+// URL classification helpers are provided by utils/classifier.js (importScripts above).
+// isAppMeasurementRequest, isAEPRequest, and isAnalyticsRequest are available globally.
 
 // ─── In-memory state ─────────────────────────────────────────────────────────
 
@@ -39,53 +38,6 @@ const hitsByTab = new Map();
  * @type {Map<string, chrome.runtime.Port>}
  */
 const panelPorts = new Map();
-
-// ─── URL / request classification ────────────────────────────────────────────
-
-/**
- * Return true when the URL is an AppMeasurement collection hit
- * (*.omtrdc.net/b/ss/ or CNAME-based servers using the same path).
- *
- * @param {string} url
- * @returns {boolean}
- */
-function isAppMeasurementRequest(url) {
-  try {
-    const { hostname, pathname } = new URL(url);
-    return (
-      (hostname.endsWith('.omtrdc.net') || hostname === 'omtrdc.net') &&
-      AA_PATH_PATTERN.test(pathname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Return true when the URL is an AEP Web SDK (alloy.js) Edge Network request.
- * These go to *.adobedc.net/ee/ and carry a JSON POST body.
- *
- * @param {string} url
- * @returns {boolean}
- */
-function isAEPRequest(url) {
-  try {
-    const { hostname, pathname } = new URL(url);
-    return hostname.endsWith('.adobedc.net') && AEP_PATH_PATTERN.test(pathname);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Return true when the URL is any Adobe Analytics request the extension should capture.
- *
- * @param {string} url
- * @returns {boolean}
- */
-function isAnalyticsRequest(url) {
-  return isAppMeasurementRequest(url) || isAEPRequest(url);
-}
 
 // ─── Payload decoding ─────────────────────────────────────────────────────────
 
